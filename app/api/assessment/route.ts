@@ -5,6 +5,15 @@ import { authOptions } from '@/lib/auth'
 import { getDatabase, COLLECTIONS } from '@/lib/mongodb'
 import { AssessmentModule, AssessmentAnswer } from '@/lib/types'
 
+type AssessmentDoc = {
+  userId: string
+  module: string
+  answers: AssessmentAnswer[]
+  currentQuestionIndex: number
+  updatedAt: Date
+  createdAt?: Date
+}
+
 // GET - Load assessment progress
 export async function GET(request: NextRequest) {
   try {
@@ -143,7 +152,7 @@ export async function PATCH(request: NextRequest) {
 
     // If no existing answer found, add new one
     if (updateResult.matchedCount === 0) {
-      await db.collection(COLLECTIONS.PROGRESS).updateOne(
+      await db.collection<AssessmentDoc>(COLLECTIONS.PROGRESS).updateOne(
         { userId, module },
         { 
           $push: { answers: answer },
