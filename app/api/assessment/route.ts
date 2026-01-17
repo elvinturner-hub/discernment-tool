@@ -155,7 +155,7 @@ export async function PATCH(request: NextRequest) {
       await db.collection<AssessmentDoc>(COLLECTIONS.PROGRESS).updateOne(
         { userId, module },
         { 
-          $push: { answers: answer },
+          $push: { answers: answer } as any,
           $set: { 
             currentQuestionIndex,
             updatedAt: new Date(),
