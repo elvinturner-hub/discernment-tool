@@ -1,11 +1,285 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { ObjectId } from 'mongodb'
+import Anthropic from '@anthropic-ai/sdk'
 import { authOptions } from '@/lib/auth'
 import { getDatabase, COLLECTIONS } from '@/lib/mongodb'
-import { AssessmentModule, AssessmentAnswer } from '@/lib/types'
+import { 
+  StrengthsResult, 
+  GiftsResult, 
+  VocationalResult, 
+  FreetextResult,
+  StrengthDomain,
+  SpiritualGift,
+  VocationalDomain,
+  AssessmentProgress,
+} from '@/lib/types'
+import { strengthDomains } from '@/data/strengths'
+import { spiritualGifts } from '@/data/gifts'
+import { vocationalDomains } from '@/data/vocational'
+import { SYSTEM_PROMPT, buildSynthesisPrompt, buildThemeExtractionPrompt } from '@/data/prompts'
 
-// GET - Load assessment progress
+const anthropic = new Anthropic()
+
+function processStrengths(progress: AssessmentProgress): StrengthsResult {
+  const scores: Record<StrengthDomain, number[]> = {} as any
+  
+  strengthDomains.forEach(d => {
+    scores[d.id] = []
+  })
+
+  const prefixToDomain: Record<string, StrengthDomain> = {
+    'sp': 'strategic-patterning',
+    'ad': 'analytical-discernment',
+    'vi': 'vision-imagination',
+    'ed': 'execution-drive',
+    'ro': 'responsibility-orientation',
+    'sr': 'stability-reliability',
+    'ap': 'adaptability',
+    'lv': 'learning-velocity',
+    'ra': 'relational-attunement',
+    'ip': 'influence-persuasion',
+    'ci': 'courage-initiative',
+    'hm': 'harmony-mediation',
+    'pe': 'precision-excellence',
+    'ss': 'systems-stewardship',
+  }
+
+  progress.answers.forEach(answer => {
+    const prefix = answer.questionId.split('-')[0]
+    const domain = prefixToDomain[prefix]
+    
+    if (domain) {
+      let score = 0
+      const val = answer.value
+
+      if (typeof val === 'number') {
+        score = val
+      } else if (typeof val === 'string') {
+        if (val === prefix || val === `${prefix}-high`) {
+          score = 5
+        } else if (val === `${prefix}-med`) {
+          score = 4
+        } else if (val === `${prefix}-low`) {
+          score = 2
+        } else if (val === `${prefix}-none` || val === 'other') {
+          score = 1
+        } else if (val.startsWith('other-')) {
+          score = 2
+        }
+      }
+
+      scores[domain].push(score)
+    }
+  })
+
+  const rawScores: Record<StrengthDomain, number> = {} as any
+  strengthDomains.forEach(d => {
+    const domainScores = scores[d.id]
+    rawScores[d.id] = domainScores.length > 0
+      ? domainScores.reduce((a, b) => a + b, 0) / domainScores.length
+      : 0
+  })
+
+  const sorted = Object.entries(rawScores)
+    .sort(([, a], [, b]) => b - a)
+    .map(([domain, score]) => ({
+      domain: domain as StrengthDomain,
+      score: Math.round(score * 10) / 10,
+      energy: score >= 4 ? 'high' : score >= 2.5 ? 'moderate' : 'low' as const,
+    }))
+
+  return {
+    topStrengths: sorted.slice(0, 5),
+    secondaryStrengths: sorted.slice(5, 10),
+    costlyZones: sorted.slice(-3).reverse(),
+    rawScores,
+  }
+}
+
+function processGifts(progress: AssessmentProgress): GiftsResult {
+  const scores: Record<SpiritualGift, number[]> = {} as any
+  
+  spiritualGifts.forEach(g => {
+    scores[g.id] = []
+  })
+
+  const prefixToGift: Record<string, SpiritualGift> = {
+    'wis': 'wisdom',
+    'kno': 'knowledge',
+    'fai': 'faith',
+    'hea': 'healing',
+    'mir': 'miracles',
+    'pro': 'prophecy',
+    'dis': 'discernment-of-spirits',
+    'ton': 'tongues',
+    'int': 'interpretation-of-tongues',
+    'tea': 'teaching',
+    'she': 'shepherding',
+    'apo': 'apostolic',
+    'eva': 'evangelism',
+    'ser': 'service',
+    'enc': 'encouragement',
+    'giv': 'giving',
+  }
+
+  progress.answers.forEach(answer => {
+    const prefix = answer.questionId.split('-')[0]
+    const gift = prefixToGift[prefix]
+    
+    if (gift) {
+      let score = 0
+      const val = answer.value
+
+      if (typeof val === 'number') {
+        score = val
+      } else if (typeof val === 'string') {
+        if (val === 'high') score = 5
+        else if (val === 'med') score = 3.5
+        else if (val === 'low') score = 2
+        else if (val === 'none') score = 1
+      }
+
+      scores[gift].push(score)
+    }
+  })
+
+  const rawScores: Record<SpiritualGift, number> = {} as any
+  spiritualGifts.forEach(g => {
+    const giftScores = scores[g.id]
+    rawScores[g.id] = giftScores.length > 0
+      ? giftScores.reduce((a, b) => a + b, 0) / giftScores.length
+      : 0
+  })
+
+  const sorted = Object.entries(rawScores)
+    .filter(([, score]) => score >= 2.5)
+    .sort(([, a], [, b]) => b - a)
+    .map(([gift, score]) => ({
+      gift: gift as SpiritualGift,
+      evidenceStrength: score >= 4 ? 'strong' : score >= 3 ? 'moderate' : 'emerging' as const,
+      patterns: [],
+    }))
+
+  return {
+    primaryGifts: sorted.filter(g => g.evidenceStrength === 'strong' || g.evidenceStrength === 'moderate').slice(0, 4),
+    emergingGifts: sorted.filter(g => g.evidenceStrength === 'emerging').slice(0, 3),
+    rawScores,
+  }
+}
+
+function processVocational(progress: AssessmentProgress): VocationalResult {
+  const scores: Record<VocationalDomain, number[]> = {} as any
+  const costScores: Record<VocationalDomain, number[]> = {} as any
+  
+  vocationalDomains.forEach(d => {
+    scores[d.id] = []
+    costScores[d.id] = []
+  })
+
+  const prefixToDomain: Record<string, VocationalDomain> = {
+    'fd': 'formation-discipleship',
+    'ls': 'leadership-stewardship',
+    'jm': 'justice-mercy',
+    'cc': 'cultural-creation',
+    'pm': 'pioneering-mission',
+  }
+
+  progress.answers.forEach(answer => {
+    const prefix = answer.questionId.split('-')[0]
+    const domain = prefixToDomain[prefix]
+    const questionNum = parseInt(answer.questionId.split('-')[1])
+    
+    if (domain) {
+      let score = 0
+      const val = answer.value
+
+      if (typeof val === 'number') {
+        score = val
+      } else if (typeof val === 'string') {
+        if (val === `${prefix}-high` || val === prefix) {
+          score = 5
+        } else if (val.startsWith('other-')) {
+          const otherPrefix = val.replace('other-', '')
+          const otherDomain = prefixToDomain[otherPrefix]
+          if (otherDomain) {
+            scores[otherDomain].push(4)
+          }
+          score = 2
+        } else if (val === 'other') {
+          score = 2
+        }
+      }
+
+      if (questionNum === 3) {
+        costScores[domain].push(score)
+      } else {
+        scores[domain].push(score)
+      }
+    }
+  })
+
+  const rawScores: Record<VocationalDomain, number> = {} as any
+  vocationalDomains.forEach(d => {
+    const domainScores = scores[d.id]
+    rawScores[d.id] = domainScores.length > 0
+      ? domainScores.reduce((a, b) => a + b, 0) / domainScores.length
+      : 0
+  })
+
+  const sorted = Object.entries(rawScores)
+    .sort(([, a], [, b]) => b - a)
+    .map(([domain, score]) => {
+      const domainCosts = costScores[domain as VocationalDomain]
+      const avgCost = domainCosts.length > 0
+        ? domainCosts.reduce((a, b) => a + b, 0) / domainCosts.length
+        : 3
+
+      return {
+        domain: domain as VocationalDomain,
+        pull: score >= 4 ? 'strong' : score >= 3 ? 'moderate' : 'holding' as const,
+        costTolerance: avgCost >= 4 ? 'high' : avgCost >= 2.5 ? 'moderate' : 'uncertain' as const,
+      }
+    })
+
+  return {
+    primaryGravity: sorted[0],
+    secondaryDirections: sorted.slice(1, 3).filter(d => d.pull !== 'holding'),
+    prayerfulHolds: sorted.filter(d => d.pull === 'holding'),
+    rawScores,
+  }
+}
+
+function processFreetext(progress: AssessmentProgress): FreetextResult {
+  const result: FreetextResult = {
+    passions: '',
+    feedback: '',
+    dreams: '',
+    threads: '',
+    extractedThemes: [],
+  }
+
+  progress.answers.forEach(answer => {
+    const val = answer.value as string
+    switch (answer.questionId) {
+      case 'ft-passions':
+        result.passions = val
+        break
+      case 'ft-feedback':
+        result.feedback = val
+        break
+      case 'ft-dreams':
+        result.dreams = val
+        break
+      case 'ft-threads':
+        result.threads = val
+        break
+    }
+  })
+
+  return result
+}
+
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -13,34 +287,25 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { searchParams } = new URL(request.url)
-    const module = searchParams.get('module') as AssessmentModule | null
-
     const db = await getDatabase()
     const userId = new ObjectId((session.user as any).id)
 
-    if (module) {
-      const progress = await db.collection(COLLECTIONS.PROGRESS).findOne({
-        userId,
-        module,
-      } as any)
-      return NextResponse.json({ progress })
-    } else {
-      const allProgress = await db.collection(COLLECTIONS.PROGRESS)
-        .find({ userId } as any)
-        .toArray()
-      return NextResponse.json({ progress: allProgress })
-    }
+    const report = await db.collection(COLLECTIONS.REPORTS)
+      .findOne(
+        { userId } as any,
+        { sort: { generatedAt: -1 } }
+      )
+
+    return NextResponse.json({ report })
   } catch (error) {
-    console.error('Error loading assessment progress:', error)
+    console.error('Error loading report:', error)
     return NextResponse.json(
-      { error: 'Failed to load progress' },
+      { error: 'Failed to load report' },
       { status: 500 }
     )
   }
 }
 
-// POST - Save assessment progress
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions)
@@ -48,120 +313,137 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { module, answers, currentQuestionIndex, completed } = await request.json()
+    const db = await getDatabase()
+    const userId = new ObjectId((session.user as any).id)
 
-    if (!module) {
+    const allProgress = await db.collection(COLLECTIONS.PROGRESS)
+      .find({ userId, completed: true } as any)
+      .toArray()
+
+    const modules = allProgress.map(p => p.module)
+    const requiredModules = ['strengths', 'gifts', 'vocational', 'freetext']
+    const missingModules = requiredModules.filter(m => !modules.includes(m))
+
+    if (missingModules.length > 0) {
       return NextResponse.json(
-        { error: 'Module is required' },
+        { error: `Please complete all assessments first. Missing: ${missingModules.join(', ')}` },
         { status: 400 }
       )
     }
 
-    const db = await getDatabase()
-    const userId = new ObjectId((session.user as any).id)
+    const strengthsProgress = allProgress.find(p => p.module === 'strengths') as AssessmentProgress
+    const giftsProgress = allProgress.find(p => p.module === 'gifts') as AssessmentProgress
+    const vocationalProgress = allProgress.find(p => p.module === 'vocational') as AssessmentProgress
+    const freetextProgress = allProgress.find(p => p.module === 'freetext') as AssessmentProgress
 
-    const updateData: any = {
-      userId,
-      module,
-      answers: answers || [],
-      currentQuestionIndex: currentQuestionIndex || 0,
-      completed: completed || false,
-      updatedAt: new Date(),
+    const strengths = processStrengths(strengthsProgress)
+    const gifts = processGifts(giftsProgress)
+    const vocational = processVocational(vocationalProgress)
+    let freetext = processFreetext(freetextProgress)
+
+    if (freetext.passions || freetext.feedback || freetext.dreams || freetext.threads) {
+      try {
+        const themeResponse = await anthropic.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 500,
+          messages: [
+            {
+              role: 'user',
+              content: buildThemeExtractionPrompt(freetext)
+            }
+          ]
+        })
+
+        const themeText = themeResponse.content[0].type === 'text' 
+          ? themeResponse.content[0].text 
+          : ''
+        
+        try {
+          freetext.extractedThemes = JSON.parse(themeText)
+        } catch {
+          freetext.extractedThemes = []
+        }
+      } catch (error) {
+        console.error('Theme extraction error:', error)
+        freetext.extractedThemes = []
+      }
     }
 
-    if (completed) {
-      updateData.completedAt = new Date()
-    }
-
-    const result = await db.collection(COLLECTIONS.PROGRESS).updateOne(
-      { userId, module } as any,
-      { 
-        $set: updateData,
-        $setOnInsert: { startedAt: new Date() }
-      },
-      { upsert: true }
+    const synthesisPrompt = buildSynthesisPrompt(
+      strengths,
+      gifts,
+      vocational,
+      freetext,
+      session.user.name || 'Friend'
     )
+
+    const synthesisResponse = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4000,
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: 'user',
+          content: synthesisPrompt
+        }
+      ]
+    })
+
+    const reportContent = synthesisResponse.content[0].type === 'text'
+      ? synthesisResponse.content[0].text
+      : ''
+
+    const synthesis = {
+      alignment: '',
+      tension: '',
+      shadow: '',
+      nextSteps: '',
+      discernmentQuestion: '',
+    }
+
+    const report = {
+      userId,
+      generatedAt: new Date(),
+      moduleData: {
+        strengths,
+        gifts,
+        vocational,
+        freetext,
+      },
+      synthesis,
+      content: reportContent,
+    }
+
+    await db.collection(COLLECTIONS.REPORTS).insertOne(report as any)
 
     return NextResponse.json({ 
       success: true,
-      upserted: result.upsertedCount > 0,
-      modified: result.modifiedCount > 0,
+      report,
     })
   } catch (error) {
-    console.error('Error saving assessment progress:', error)
+    console.error('Error generating report:', error)
     return NextResponse.json(
-      { error: 'Failed to save progress' },
+      { error: 'Failed to generate report' },
       { status: 500 }
     )
   }
 }
+```
 
-// PATCH - Update single answer (for auto-save)
-export async function PATCH(request: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+4. Click **"Commit changes"** → **"Commit changes"**
 
-    const { module, questionId, value, currentQuestionIndex } = await request.json()
+---
 
-    if (!module || !questionId) {
-      return NextResponse.json(
-        { error: 'Module and questionId are required' },
-        { status: 400 }
-      )
-    }
+## Last edit: package.json
 
-    const db = await getDatabase()
-    const userId = new ObjectId((session.user as any).id)
+1. Go back to the main repository page (click "discernment-tool" at the top)
+2. Click on `package.json`
+3. Click the **pencil icon** to edit
+4. Find this line:
+```
+"next": "14.2.5",
+```
 
-    const answer: AssessmentAnswer = {
-      questionId,
-      value,
-      answeredAt: new Date(),
-    }
-
-    const updateResult = await db.collection(COLLECTIONS.PROGRESS).updateOne(
-      { 
-        userId, 
-        module,
-        'answers.questionId': questionId 
-      } as any,
-      { 
-        $set: { 
-          'answers.$.value': value,
-          'answers.$.answeredAt': new Date(),
-          currentQuestionIndex,
-          updatedAt: new Date(),
-        }
-      }
-    )
-
-    if (updateResult.matchedCount === 0) {
-      await db.collection(COLLECTIONS.PROGRESS).updateOne(
-        { userId, module } as any,
-        { 
-          $push: { answers: answer } as any,
-          $set: { 
-            currentQuestionIndex,
-            updatedAt: new Date(),
-          },
-          $setOnInsert: { 
-            startedAt: new Date(),
-            completed: false,
-          }
-        },
-        { upsert: true }
-      )
-    }
-
-    return NextResponse.json({ success: true })
-  } catch (error) {
-    console.error('Error updating answer:', error)
-    return NextResponse.json(
-      { error: 'Failed to save answer' },
-      { status: 500 }
-    )
-  }
-}
+5. Change it to:
+```
+"next": "14.2.28",
