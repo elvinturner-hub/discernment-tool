@@ -5,15 +5,6 @@ import { authOptions } from '@/lib/auth'
 import { getDatabase, COLLECTIONS } from '@/lib/mongodb'
 import { AssessmentModule, AssessmentAnswer } from '@/lib/types'
 
-type AssessmentDoc = {
-  userId: string
-  module: string
-  answers: AssessmentAnswer[]
-  currentQuestionIndex: number
-  updatedAt: Date
-  createdAt?: Date
-}
-
 // GET - Load assessment progress
 export async function GET(request: NextRequest) {
   try {
@@ -29,16 +20,14 @@ export async function GET(request: NextRequest) {
     const userId = new ObjectId((session.user as any).id)
 
     if (module) {
-      // Get progress for specific module
       const progress = await db.collection(COLLECTIONS.PROGRESS).findOne({
         userId,
         module,
-      })
+      } as any)
       return NextResponse.json({ progress })
     } else {
-      // Get progress for all modules
       const allProgress = await db.collection(COLLECTIONS.PROGRESS)
-        .find({ userId })
+        .find({ userId } as any)
         .toArray()
       return NextResponse.json({ progress: allProgress })
     }
@@ -85,7 +74,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await db.collection(COLLECTIONS.PROGRESS).updateOne(
-      { userId, module },
+      { userId, module } as any,
       { 
         $set: updateData,
         $setOnInsert: { startedAt: new Date() }
@@ -133,13 +122,12 @@ export async function PATCH(request: NextRequest) {
       answeredAt: new Date(),
     }
 
-    // First, try to update existing answer
     const updateResult = await db.collection(COLLECTIONS.PROGRESS).updateOne(
       { 
         userId, 
         module,
         'answers.questionId': questionId 
-      },
+      } as any,
       { 
         $set: { 
           'answers.$.value': value,
@@ -150,10 +138,9 @@ export async function PATCH(request: NextRequest) {
       }
     )
 
-    // If no existing answer found, add new one
     if (updateResult.matchedCount === 0) {
-      await db.collection<AssessmentDoc>(COLLECTIONS.PROGRESS).updateOne(
-        { userId, module },
+      await db.collection(COLLECTIONS.PROGRESS).updateOne(
+        { userId, module } as any,
         { 
           $push: { answers: answer } as any,
           $set: { 
