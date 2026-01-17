@@ -1,0 +1,460 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { ObjectId } from 'mongodb'
+import Anthropic from '@anthropic-ai/sdk'
+import { authOptions } from '@/lib/auth'
+import { getDatabase, COLLECTIONS } from '@/lib/mongodb'
+import { 
+  StrengthsResult, 
+  GiftsResult, 
+  VocationalResult, 
+  FreetextResult,
+  StrengthDomain,
+  SpiritualGift,
+  VocationalDomain,
+  AssessmentProgress,
+} from '@/lib/types'
+import { strengthDomains } from '@/data/strengths'
+import { spiritualGifts } from '@/data/gifts'
+import { vocationalDomains } from '@/data/vocational'
+import { SYSTEM_PROMPT, buildSynthesisPrompt, buildThemeExtractionPrompt } from '@/data/prompts'
+
+const anthropic = new Anthropic()
+
+// Process strengths answers into results
+function processStrengths(progress: AssessmentProgress): StrengthsResult {
+  const scores: Record<StrengthDomain, number[]> = {} as any
+  
+  // Initialize all domains
+  strengthDomains.forEach(d => {
+    scores[d.id] = []
+  })
+
+  // Map question prefixes to domains
+  const prefixToDomain: Record<string, StrengthDomain> = {
+    'sp': 'strategic-patterning',
+    'ad': 'analytical-discernment',
+    'vi': 'vision-imagination',
+    'ed': 'execution-drive',
+    'ro': 'responsibility-orientation',
+    'sr': 'stability-reliability',
+    'ap': 'adaptability',
+    'lv': 'learning-velocity',
+    'ra': 'relational-attunement',
+    'ip': 'influence-persuasion',
+    'ci': 'courage-initiative',
+    'hm': 'harmony-mediation',
+    'pe': 'precision-excellence',
+    'ss': 'systems-stewardship',
+  }
+
+  progress.answers.forEach(answer => {
+    const prefix = answer.questionId.split('-')[0]
+    const domain = prefixToDomain[prefix]
+    
+    if (domain) {
+      let score = 0
+      const val = answer.value
+
+      // Convert different answer types to scores
+      if (typeof val === 'number') {
+        score = val
+      } else if (typeof val === 'string') {
+        if (val === prefix || val === `${prefix}-high`) {
+          score = 5
+        } else if (val === `${prefix}-med`) {
+          score = 4
+        } else if (val === `${prefix}-low`) {
+          score = 2
+        } else if (val === `${prefix}-none` || val === 'other') {
+          score = 1
+        } else if (val.startsWith('other-')) {
+          score = 2
+        }
+      }
+
+      scores[domain].push(score)
+    }
+  })
+
+  // Calculate averages
+  const rawScores: Record<StrengthDomain, number> = {} as any
+  strengthDomains.forEach(d => {
+    const domainScores = scores[d.id]
+    rawScores[d.id] = domainScores.length > 0
+      ? domainScores.reduce((a, b) => a + b, 0) / domainScores.length
+      : 0
+  })
+
+  // Sort and categorize
+  const sorted = Object.entries(rawScores)
+    .sort(([, a], [, b]) => b - a)
+    .map(([domain, score]) => ({
+      domain: domain as StrengthDomain,
+      score: Math.round(score * 10) / 10,
+      energy: score >= 4 ? 'high' : score >= 2.5 ? 'moderate' : 'low' as const,
+    }))
+
+  return {
+    topStrengths: sorted.slice(0, 5),
+    secondaryStrengths: sorted.slice(5, 10),
+    costlyZones: sorted.slice(-3).reverse(),
+    rawScores,
+  }
+}
+
+// Process gifts answers into results
+function processGifts(progress: AssessmentProgress): GiftsResult {
+  const scores: Record<SpiritualGift, number[]> = {} as any
+  
+  // Initialize all gifts
+  spiritualGifts.forEach(g => {
+    scores[g.id] = []
+  })
+
+  // Map question prefixes to gifts
+  const prefixToGift: Record<string, SpiritualGift> = {
+    'wis': 'wisdom',
+    'kno': 'knowledge',
+    'fai': 'faith',
+    'hea': 'healing',
+    'mir': 'miracles',
+    'pro': 'prophecy',
+    'dis': 'discernment-of-spirits',
+    'ton': 'tongues',
+    'int': 'interpretation-of-tongues',
+    'tea': 'teaching',
+    'she': 'shepherding',
+    'apo': 'apostolic',
+    'eva': 'evangelism',
+    'ser': 'service',
+    'enc': 'encouragement',
+    'giv': 'giving',
+  }
+
+  progress.answers.forEach(answer => {
+    const prefix = answer.questionId.split('-')[0]
+    const gift = prefixToGift[prefix]
+    
+    if (gift) {
+      let score = 0
+      const val = answer.value
+
+      if (typeof val === 'number') {
+        score = val
+      } else if (typeof val === 'string') {
+        if (val === 'high') score = 5
+        else if (val === 'med') score = 3.5
+        else if (val === 'low') score = 2
+        else if (val === 'none') score = 1
+      }
+
+      scores[gift].push(score)
+    }
+  })
+
+  // Calculate averages
+  const rawScores: Record<SpiritualGift, number> = {} as any
+  spiritualGifts.forEach(g => {
+    const giftScores = scores[g.id]
+    rawScores[g.id] = giftScores.length > 0
+      ? giftScores.reduce((a, b) => a + b, 0) / giftScores.length
+      : 0
+  })
+
+  // Sort and categorize
+  const sorted = Object.entries(rawScores)
+    .filter(([, score]) => score >= 2.5) // Only include gifts with some evidence
+    .sort(([, a], [, b]) => b - a)
+    .map(([gift, score]) => ({
+      gift: gift as SpiritualGift,
+      evidenceStrength: score >= 4 ? 'strong' : score >= 3 ? 'moderate' : 'emerging' as const,
+      patterns: [],
+    }))
+
+  return {
+    primaryGifts: sorted.filter(g => g.evidenceStrength === 'strong' || g.evidenceStrength === 'moderate').slice(0, 4),
+    emergingGifts: sorted.filter(g => g.evidenceStrength === 'emerging').slice(0, 3),
+    rawScores,
+  }
+}
+
+// Process vocational answers into results
+function processVocational(progress: AssessmentProgress): VocationalResult {
+  const scores: Record<VocationalDomain, number[]> = {} as any
+  const costScores: Record<VocationalDomain, number[]> = {} as any
+  
+  // Initialize all domains
+  vocationalDomains.forEach(d => {
+    scores[d.id] = []
+    costScores[d.id] = []
+  })
+
+  // Map question prefixes to domains
+  const prefixToDomain: Record<string, VocationalDomain> = {
+    'fd': 'formation-discipleship',
+    'ls': 'leadership-stewardship',
+    'jm': 'justice-mercy',
+    'cc': 'cultural-creation',
+    'pm': 'pioneering-mission',
+  }
+
+  progress.answers.forEach(answer => {
+    const prefix = answer.questionId.split('-')[0]
+    const domain = prefixToDomain[prefix]
+    const questionNum = parseInt(answer.questionId.split('-')[1])
+    
+    if (domain) {
+      let score = 0
+      const val = answer.value
+
+      if (typeof val === 'number') {
+        score = val
+      } else if (typeof val === 'string') {
+        // For scenario questions, check if they chose the high option for this domain
+        if (val === `${prefix}-high` || val === prefix) {
+          score = 5
+        } else if (val.startsWith('other-')) {
+          // They chose another domain
+          const otherPrefix = val.replace('other-', '')
+          const otherDomain = prefixToDomain[otherPrefix]
+          if (otherDomain) {
+            scores[otherDomain].push(4)
+          }
+          score = 2
+        } else if (val === 'other') {
+          score = 2
+        }
+      }
+
+      // Question 3 is about cost tolerance
+      if (questionNum === 3) {
+        costScores[domain].push(score)
+      } else {
+        scores[domain].push(score)
+      }
+    }
+  })
+
+  // Calculate averages
+  const rawScores: Record<VocationalDomain, number> = {} as any
+  vocationalDomains.forEach(d => {
+    const domainScores = scores[d.id]
+    rawScores[d.id] = domainScores.length > 0
+      ? domainScores.reduce((a, b) => a + b, 0) / domainScores.length
+      : 0
+  })
+
+  // Sort and create gravity objects
+  const sorted = Object.entries(rawScores)
+    .sort(([, a], [, b]) => b - a)
+    .map(([domain, score]) => {
+      const domainCosts = costScores[domain as VocationalDomain]
+      const avgCost = domainCosts.length > 0
+        ? domainCosts.reduce((a, b) => a + b, 0) / domainCosts.length
+        : 3
+
+      return {
+        domain: domain as VocationalDomain,
+        pull: score >= 4 ? 'strong' : score >= 3 ? 'moderate' : 'holding' as const,
+        costTolerance: avgCost >= 4 ? 'high' : avgCost >= 2.5 ? 'moderate' : 'uncertain' as const,
+      }
+    })
+
+  return {
+    primaryGravity: sorted[0],
+    secondaryDirections: sorted.slice(1, 3).filter(d => d.pull !== 'holding'),
+    prayerfulHolds: sorted.filter(d => d.pull === 'holding'),
+    rawScores,
+  }
+}
+
+// Process freetext answers
+function processFreetext(progress: AssessmentProgress): FreetextResult {
+  const result: FreetextResult = {
+    passions: '',
+    feedback: '',
+    dreams: '',
+    threads: '',
+    extractedThemes: [],
+  }
+
+  progress.answers.forEach(answer => {
+    const val = answer.value as string
+    switch (answer.questionId) {
+      case 'ft-passions':
+        result.passions = val
+        break
+      case 'ft-feedback':
+        result.feedback = val
+        break
+      case 'ft-dreams':
+        result.dreams = val
+        break
+      case 'ft-threads':
+        result.threads = val
+        break
+    }
+  })
+
+  return result
+}
+
+// GET - Load existing report
+export async function GET(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const db = await getDatabase()
+    const userId = new ObjectId((session.user as any).id)
+
+    // Get the most recent report
+    const report = await db.collection(COLLECTIONS.REPORTS)
+      .findOne(
+        { userId },
+        { sort: { generatedAt: -1 } }
+      )
+
+    return NextResponse.json({ report })
+  } catch (error) {
+    console.error('Error loading report:', error)
+    return NextResponse.json(
+      { error: 'Failed to load report' },
+      { status: 500 }
+    )
+  }
+}
+
+// POST - Generate new report
+export async function POST(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions)
+    if (!session?.user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const db = await getDatabase()
+    const userId = new ObjectId((session.user as any).id)
+
+    // Load all completed assessments
+    const allProgress = await db.collection(COLLECTIONS.PROGRESS)
+      .find({ userId, completed: true })
+      .toArray()
+
+    const modules = allProgress.map(p => p.module)
+    const requiredModules = ['strengths', 'gifts', 'vocational', 'freetext']
+    const missingModules = requiredModules.filter(m => !modules.includes(m))
+
+    if (missingModules.length > 0) {
+      return NextResponse.json(
+        { error: `Please complete all assessments first. Missing: ${missingModules.join(', ')}` },
+        { status: 400 }
+      )
+    }
+
+    // Process each assessment
+    const strengthsProgress = allProgress.find(p => p.module === 'strengths') as AssessmentProgress
+    const giftsProgress = allProgress.find(p => p.module === 'gifts') as AssessmentProgress
+    const vocationalProgress = allProgress.find(p => p.module === 'vocational') as AssessmentProgress
+    const freetextProgress = allProgress.find(p => p.module === 'freetext') as AssessmentProgress
+
+    const strengths = processStrengths(strengthsProgress)
+    const gifts = processGifts(giftsProgress)
+    const vocational = processVocational(vocationalProgress)
+    let freetext = processFreetext(freetextProgress)
+
+    // Extract themes from freetext using Claude
+    if (freetext.passions || freetext.feedback || freetext.dreams || freetext.threads) {
+      try {
+        const themeResponse = await anthropic.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 500,
+          messages: [
+            {
+              role: 'user',
+              content: buildThemeExtractionPrompt(freetext)
+            }
+          ]
+        })
+
+        const themeText = themeResponse.content[0].type === 'text' 
+          ? themeResponse.content[0].text 
+          : ''
+        
+        try {
+          freetext.extractedThemes = JSON.parse(themeText)
+        } catch {
+          // If parsing fails, leave themes empty
+          freetext.extractedThemes = []
+        }
+      } catch (error) {
+        console.error('Theme extraction error:', error)
+        freetext.extractedThemes = []
+      }
+    }
+
+    // Generate synthesis report using Claude
+    const synthesisPrompt = buildSynthesisPrompt(
+      strengths,
+      gifts,
+      vocational,
+      freetext,
+      session.user.name || 'Friend'
+    )
+
+    const synthesisResponse = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4000,
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: 'user',
+          content: synthesisPrompt
+        }
+      ]
+    })
+
+    const reportContent = synthesisResponse.content[0].type === 'text'
+      ? synthesisResponse.content[0].text
+      : ''
+
+    // Parse the report into sections (simple extraction)
+    const synthesis = {
+      alignment: '',
+      tension: '',
+      shadow: '',
+      nextSteps: '',
+      discernmentQuestion: '',
+    }
+
+    // Store the report
+    const report = {
+      userId,
+      generatedAt: new Date(),
+      moduleData: {
+        strengths,
+        gifts,
+        vocational,
+        freetext,
+      },
+      synthesis,
+      content: reportContent,
+    }
+
+    await db.collection(COLLECTIONS.REPORTS).insertOne(report)
+
+    return NextResponse.json({ 
+      success: true,
+      report,
+    })
+  } catch (error) {
+    console.error('Error generating report:', error)
+    return NextResponse.json(
+      { error: 'Failed to generate report' },
+      { status: 500 }
+    )
+  }
+}
