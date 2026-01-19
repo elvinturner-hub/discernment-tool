@@ -5,7 +5,7 @@ import { useSession, signOut } from 'next-auth/react'
 
 export function Header() {
   const { data: session } = useSession()
-
+  
   return (
     <header className="border-b border-stone-200 bg-white/60 backdrop-blur-md sticky top-0 z-50">
       <div className="container-wide py-4 flex items-center justify-between">
