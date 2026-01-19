@@ -127,6 +127,44 @@ export default function ReportPage() {
     )
   }
 
+  // Get sorted data for rankings
+  const strengthsData = report.moduleData?.strengths
+  const giftsData = report.moduleData?.gifts
+  const vocationalData = report.moduleData?.vocational
+
+  // Sort strengths by score
+  const sortedStrengths = strengthsData?.rawScores 
+    ? Object.entries(strengthsData.rawScores)
+        .map(([id, score]) => ({
+          id,
+          name: strengthDomains.find(d => d.id === id)?.name || id,
+          score: score as number
+        }))
+        .sort((a, b) => b.score - a.score)
+    : []
+
+  // Sort gifts by score
+  const sortedGifts = giftsData?.rawScores
+    ? Object.entries(giftsData.rawScores)
+        .map(([id, score]) => ({
+          id,
+          name: spiritualGifts.find(g => g.id === id)?.name || id,
+          score: score as number
+        }))
+        .sort((a, b) => b.score - a.score)
+    : []
+
+  // Sort vocational by score
+  const sortedVocational = vocationalData?.rawScores
+    ? Object.entries(vocationalData.rawScores)
+        .map(([id, score]) => ({
+          id,
+          name: vocationalDomains.find(v => v.id === id)?.name || id,
+          score: score as number
+        }))
+        .sort((a, b) => b.score - a.score)
+    : []
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-stone-50 via-white to-stone-50">
       {/* Sticky Header */}
@@ -180,31 +218,160 @@ export default function ReportPage() {
             </p>
           </div>
 
-          {/* Quick Stats */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-10">
-            <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-5 border border-emerald-100">
-              <div className="text-xs font-bold text-emerald-500 uppercase tracking-wider mb-1">🌱 Top Strength</div>
-              <div className="text-base sm:text-lg font-bold text-emerald-800">
-                {strengthDomains.find(d => d.id === report.moduleData?.strengths?.topStrengths?.[0]?.domain)?.name || 'N/A'}
+          {/* ============================================= */}
+          {/* SCORE SUMMARY SECTION */}
+          {/* ============================================= */}
+          
+          <div className="mb-12">
+            <h2 className="text-xl font-bold text-stone-800 mb-6 flex items-center gap-2">
+              <span>📊</span> Your Scores at a Glance
+            </h2>
+
+            {/* Top 3 Quick Stats */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+              <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-5 border border-emerald-100">
+                <div className="text-xs font-bold text-emerald-500 uppercase tracking-wider mb-1">🥇 Top Strength</div>
+                <div className="text-base font-bold text-emerald-800">
+                  {sortedStrengths[0]?.name || 'N/A'}
+                </div>
+                <div className="text-2xl font-bold text-emerald-600 mt-1">
+                  {sortedStrengths[0]?.score?.toFixed(1) || '—'}
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-2xl p-5 border border-violet-100">
+                <div className="text-xs font-bold text-violet-500 uppercase tracking-wider mb-1">✨ Top Gift</div>
+                <div className="text-base font-bold text-violet-800">
+                  {sortedGifts[0]?.name || 'Emerging...'}
+                </div>
+                <div className="text-2xl font-bold text-violet-600 mt-1">
+                  {sortedGifts[0]?.score?.toFixed(1) || '—'}
+                </div>
+              </div>
+
+              <div className="bg-gradient-to-br from-sky-50 to-blue-50 rounded-2xl p-5 border border-sky-100">
+                <div className="text-xs font-bold text-sky-500 uppercase tracking-wider mb-1">🧭 Top Direction</div>
+                <div className="text-base font-bold text-sky-800">
+                  {sortedVocational[0]?.name || 'N/A'}
+                </div>
+                <div className="text-2xl font-bold text-sky-600 mt-1">
+                  {sortedVocational[0]?.score?.toFixed(1) || '—'}
+                </div>
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-2xl p-5 border border-violet-100">
-              <div className="text-xs font-bold text-violet-500 uppercase tracking-wider mb-1">✨ Primary Gift</div>
-              <div className="text-base sm:text-lg font-bold text-violet-800">
-                {spiritualGifts.find(g => g.id === report.moduleData?.gifts?.primaryGifts?.[0]?.gift)?.name || 'Emerging...'}
+            {/* Strengths Rankings */}
+            <div className="bg-white rounded-2xl border border-stone-200 p-6 mb-6">
+              <h3 className="font-bold text-stone-700 mb-4 flex items-center gap-2">
+                <span className="text-lg">🌱</span> Created Strengths
+                <span className="text-xs font-normal text-stone-400 ml-auto">Ranked by score</span>
+              </h3>
+              <div className="space-y-3">
+                {sortedStrengths.slice(0, 7).map((strength, index) => (
+                  <ScoreBar 
+                    key={strength.id}
+                    rank={index + 1}
+                    name={strength.name}
+                    score={strength.score}
+                    maxScore={5}
+                    color={index < 3 ? 'emerald' : 'stone'}
+                    isTop={index < 3}
+                  />
+                ))}
+                {sortedStrengths.length > 7 && (
+                  <details className="mt-2">
+                    <summary className="text-sm text-stone-400 cursor-pointer hover:text-stone-600">
+                      Show all {sortedStrengths.length} strengths...
+                    </summary>
+                    <div className="space-y-3 mt-3">
+                      {sortedStrengths.slice(7).map((strength, index) => (
+                        <ScoreBar 
+                          key={strength.id}
+                          rank={index + 8}
+                          name={strength.name}
+                          score={strength.score}
+                          maxScore={5}
+                          color="stone"
+                          isTop={false}
+                        />
+                      ))}
+                    </div>
+                  </details>
+                )}
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-sky-50 to-blue-50 rounded-2xl p-5 border border-sky-100">
-              <div className="text-xs font-bold text-sky-500 uppercase tracking-wider mb-1">🧭 Drawn Toward</div>
-              <div className="text-base sm:text-lg font-bold text-sky-800">
-                {vocationalDomains.find(v => v.id === report.moduleData?.vocational?.primaryGravity?.domain)?.name || 'N/A'}
+            {/* Gifts Rankings */}
+            <div className="bg-white rounded-2xl border border-stone-200 p-6 mb-6">
+              <h3 className="font-bold text-stone-700 mb-4 flex items-center gap-2">
+                <span className="text-lg">✨</span> Spiritual Gifts
+                <span className="text-xs font-normal text-stone-400 ml-auto">Ranked by evidence</span>
+              </h3>
+              <div className="space-y-3">
+                {sortedGifts.slice(0, 6).map((gift, index) => (
+                  <ScoreBar 
+                    key={gift.id}
+                    rank={index + 1}
+                    name={gift.name}
+                    score={gift.score}
+                    maxScore={5}
+                    color={index < 3 ? 'violet' : 'stone'}
+                    isTop={index < 3}
+                  />
+                ))}
+                {sortedGifts.length > 6 && (
+                  <details className="mt-2">
+                    <summary className="text-sm text-stone-400 cursor-pointer hover:text-stone-600">
+                      Show all {sortedGifts.length} gifts...
+                    </summary>
+                    <div className="space-y-3 mt-3">
+                      {sortedGifts.slice(6).map((gift, index) => (
+                        <ScoreBar 
+                          key={gift.id}
+                          rank={index + 7}
+                          name={gift.name}
+                          score={gift.score}
+                          maxScore={5}
+                          color="stone"
+                          isTop={false}
+                        />
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            </div>
+
+            {/* Vocational Rankings */}
+            <div className="bg-white rounded-2xl border border-stone-200 p-6">
+              <h3 className="font-bold text-stone-700 mb-4 flex items-center gap-2">
+                <span className="text-lg">🧭</span> Vocational Direction
+                <span className="text-xs font-normal text-stone-400 ml-auto">Ranked by pull</span>
+              </h3>
+              <div className="space-y-3">
+                {sortedVocational.map((direction, index) => (
+                  <ScoreBar 
+                    key={direction.id}
+                    rank={index + 1}
+                    name={direction.name}
+                    score={direction.score}
+                    maxScore={5}
+                    color={index === 0 ? 'sky' : index === 1 ? 'sky' : 'stone'}
+                    isTop={index < 2}
+                  />
+                ))}
               </div>
             </div>
           </div>
 
-          {/* Main Report */}
+          {/* Divider */}
+          <div className="flex items-center gap-4 my-10">
+            <div className="flex-1 h-px bg-stone-200"></div>
+            <span className="text-stone-400 text-sm">Deeper Insights</span>
+            <div className="flex-1 h-px bg-stone-200"></div>
+          </div>
+
+          {/* Main Report Content */}
           <div 
             className="report-content space-y-6"
             dangerouslySetInnerHTML={{ __html: formatReportContent(report.content) }}
@@ -254,6 +421,9 @@ export default function ReportPage() {
           .sticky { position: relative !important; }
           button { display: none !important; }
           a[href="/dashboard"] { display: none !important; }
+          details { display: block !important; }
+          details > summary { display: none !important; }
+          details > div { display: block !important; }
         }
         
         .report-content h3 {
@@ -286,6 +456,80 @@ export default function ReportPage() {
           color: #78716c;
         }
       `}</style>
+    </div>
+  )
+}
+
+// Score Bar Component
+function ScoreBar({ 
+  rank, 
+  name, 
+  score, 
+  maxScore, 
+  color, 
+  isTop 
+}: { 
+  rank: number
+  name: string
+  score: number
+  maxScore: number
+  color: 'emerald' | 'violet' | 'sky' | 'stone'
+  isTop: boolean
+}) {
+  const percentage = (score / maxScore) * 100
+  
+  const colorClasses = {
+    emerald: {
+      bg: 'bg-emerald-100',
+      fill: 'bg-emerald-500',
+      text: 'text-emerald-700',
+      rank: 'bg-emerald-500 text-white',
+    },
+    violet: {
+      bg: 'bg-violet-100',
+      fill: 'bg-violet-500',
+      text: 'text-violet-700',
+      rank: 'bg-violet-500 text-white',
+    },
+    sky: {
+      bg: 'bg-sky-100',
+      fill: 'bg-sky-500',
+      text: 'text-sky-700',
+      rank: 'bg-sky-500 text-white',
+    },
+    stone: {
+      bg: 'bg-stone-100',
+      fill: 'bg-stone-400',
+      text: 'text-stone-600',
+      rank: 'bg-stone-300 text-stone-600',
+    },
+  }
+  
+  const c = colorClasses[color]
+  
+  return (
+    <div className="flex items-center gap-3">
+      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${c.rank}`}>
+        {rank}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between mb-1">
+          <span className={`text-sm font-medium truncate ${isTop ? c.text : 'text-stone-600'}`}>
+            {name}
+          </span>
+          <span className={`text-sm font-bold ml-2 ${isTop ? c.text : 'text-stone-500'}`}>
+            {score.toFixed(1)}
+          </span>
+        </div>
+        <div className={`h-2 rounded-full ${c.bg} overflow-hidden`}>
+          <motion.div 
+            className={`h-full rounded-full ${c.fill}`}
+            initial={{ width: 0 }}
+            animate={{ width: `${percentage}%` }}
+            transition={{ duration: 0.8, ease: 'easeOut' }}
+          />
+        </div>
+      </div>
     </div>
   )
 }
