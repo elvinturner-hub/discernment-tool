@@ -15,22 +15,28 @@ export function Header() {
         </Link>
 
         {session?.user && (
-          <nav className="flex items-center gap-6">
+          <nav className="flex items-center gap-4 sm:gap-6">
             <Link 
               href="/dashboard" 
-              className="text-small text-stone-600 hover:text-stone-800 transition-colors"
+              className="text-sm text-stone-600 hover:text-stone-800 transition-colors"
             >
               Dashboard
             </Link>
             <Link 
+              href="/guide" 
+              className="text-sm text-stone-600 hover:text-stone-800 transition-colors"
+            >
+              <span className="hidden sm:inline">📖 </span>Guide
+            </Link>
+            <Link 
               href="/report" 
-              className="text-small text-stone-600 hover:text-stone-800 transition-colors"
+              className="text-sm text-stone-600 hover:text-stone-800 transition-colors"
             >
               Report
             </Link>
             <button
               onClick={() => signOut({ callbackUrl: '/' })}
-              className="text-small text-stone-500 hover:text-stone-700 transition-colors"
+              className="text-sm text-stone-500 hover:text-stone-700 transition-colors"
             >
               Sign out
             </button>
