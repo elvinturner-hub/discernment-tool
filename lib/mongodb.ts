@@ -5,39 +5,48 @@ if (!process.env.MONGODB_URI) {
 }
 
 const uri = process.env.MONGODB_URI
-const options = {}
+const options = {
+  maxPoolSize: 10,
+  serverSelectionTimeoutMS: 60000, // Increased from 30s to 60s
+  socketTimeoutMS: 60000,
+  connectTimeoutMS: 60000,
+}
 
 let client: MongoClient
 let clientPromise: Promise<MongoClient>
 
-if (process.env.NODE_ENV === 'development') {
-  // In development mode, use a global variable so that the value
-  // is preserved across module reloads caused by HMR (Hot Module Replacement).
-  const globalWithMongo = global as typeof globalThis & {
-    _mongoClientPromise?: Promise<MongoClient>
-  }
+declare global {
+  var _mongoClientPromise: Promise<MongoClient> | undefined
+}
 
-  if (!globalWithMongo._mongoClientPromise) {
+if (process.env.NODE_ENV === 'development') {
+  // In development, use a global variable to preserve the connection
+  if (!global._mongoClientPromise) {
     client = new MongoClient(uri, options)
-    globalWithMongo._mongoClientPromise = client.connect()
+    global._mongoClientPromise = client.connect()
   }
-  clientPromise = globalWithMongo._mongoClientPromise
+  clientPromise = global._mongoClientPromise
 } else {
-  // In production mode, it's best to not use a global variable.
+  // In production, create a new connection
   client = new MongoClient(uri, options)
   clientPromise = client.connect()
 }
 
-export default clientPromise
+export async function connectToDatabase(): Promise<{ client: MongoClient; db: Db }> {
+  const client = await clientPromise
+  const db = client.db()
+  return { client, db }
+}
 
 export async function getDatabase(): Promise<Db> {
   const client = await clientPromise
-  return client.db('discernment')
+  return client.db()
 }
 
-// Collection names
 export const COLLECTIONS = {
   USERS: 'users',
-  PROGRESS: 'assessment_progress',
+  ASSESSMENTS: 'assessments',
   REPORTS: 'reports',
 } as const
+
+export default clientPromise
